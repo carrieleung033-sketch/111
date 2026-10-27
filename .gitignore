@@ -1,0 +1,6 @@
+.runtime/
+__pycache__/
+.env
+
+# External skills are restored from the pinned manifest.
+.agents/skills/
