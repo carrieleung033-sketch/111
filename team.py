@@ -79,7 +79,7 @@ def worker_once():
     if not task:
         return False
     data = json.loads(task['payload'])
-    studio.render(task['id'], data['files'], data['duration'], data.get('bgm'), data.get('volume', .3))
+    studio.render(task['id'], data['files'], data['duration'], data.get('bgm'), data.get('volume', .3), data.get('edit_style', 'scene'))
     result = studio.JOBS.pop(task['id'])
     with connect() as db:
         db.execute('UPDATE tasks SET status=?, error=?, url=? WHERE id=?', (result['status'], result.get('error'), result.get('url'), task['id']))
@@ -115,6 +115,15 @@ class TeamHandler(studio.Handler):
         if self.path == '/api/tasks':
             with connect() as db:
                 tasks = [dict(r) for r in db.execute('SELECT id,owner,mode,script,status,error,url,created FROM tasks ORDER BY created DESC LIMIT 100')]
+            for task in tasks:
+                report_path = studio.DATA / (task['id'] + '-edit.json')
+                if task['status'] == 'done' and report_path.is_file():
+                    try:
+                        report = json.loads(report_path.read_text())
+                        task['edit_summary'] = {'style': report['style'], 'segments': len(report['clips']), 'seconds': report['output_duration'], 'audio': report['audio'], 'methods': sorted(set(c.get('method', 'sequence') for c in report['clips']))}
+                        task['report_url'] = '/media/' + report_path.name
+                    except (ValueError, KeyError, OSError):
+                        pass
             return self.send(200, {'tasks': tasks})
         if self.path.startswith('/api/jobs/'):
             with connect() as db:
@@ -182,6 +191,7 @@ class TeamHandler(studio.Handler):
                 if not str(data.get('market', '')).strip(): raise ValueError('请选择目标市场')
                 error = MISSING_SERVICE['reference']
             if mode == 'assets':
+                if data.get('edit_style', 'scene') not in ['scene', 'rhythm', 'sequence']: raise ValueError('剪辑方式不支持')
                 files = data.get('files', [])
                 if not isinstance(files, list) or not 1 <= len(files) <= 12: raise ValueError('请选择 1–12 个素材')
                 for name in files:

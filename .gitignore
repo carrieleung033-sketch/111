@@ -4,3 +4,5 @@ __pycache__/
 
 # External skills are restored from the pinned manifest.
 .agents/skills/
+
+.venv/

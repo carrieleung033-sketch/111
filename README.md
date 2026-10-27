@@ -6,14 +6,17 @@
 
 ## 启动
 
-需要 Python 3.10+、FFmpeg（含 libx264）。无需 Python 第三方依赖。
+需要 Python 3.10+、FFmpeg（含 libx264），以及 requirements.txt 中的镜头检测依赖。Docker 构建会自动安装。
 
 ```bash
 cd /workspace/111
-python server.py
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python team.py --create-user manager
+.venv/bin/python team.py
 ```
 
-服务默认监听 127.0.0.1:8000。使用现有仓库开发，无需另建 worktree。生成素材与导出文件保存在忽略目录 `.runtime/`。服务仅供本地单用户使用，无登录、队列持久化或生产部署保障；进程重启后任务状态清空，输出文件保留。
+服务默认监听 127.0.0.1:8000。使用现有仓库开发，无需另建 worktree。生成素材与导出文件保存在忽略目录 `.runtime/`。team.py 提供团队登录与持久化任务队列；旧的 server.py 仅供本地原型使用。正式共享部署见 docs/team.md。
 
 ## AI 配置
 
@@ -23,7 +26,7 @@ python server.py
 
 ## 当前边界
 
-- 真正执行素材上传、按上传顺序裁切拼接、15/30/45 秒目标时长、720×1280、30fps、H.264 MP4 导出。
+- 支持镜头检测、节奏剪辑与顺序拼接；15/30/45 秒为目标上限，导出 720×1280、30fps、H.264 MP4。镜头检测会抽取短片段，不保证填满目标时长。
 - 视频素材短于分配片段时长时，不会自动循环补齐，最终时长可能较短。
 - 可上传 MP3/WAV/M4A/OGG 背景音乐并试听、调整音量、移除；短音乐循环，长音乐截取，结尾淡出。素材原声不保留；未添加 BGM 时输出无声。脚本仅供参考，不自动生成配音或烧录字幕。
 - 暂无 AI 视频生成、智能镜头评分、数字人口播、TikTok 登录或自动发布。
@@ -49,8 +52,12 @@ https://www.tiktok.com/business/en/commercial-music-library
 
 新增团队入口 `python team.py`。先运行 `python team.py --create-user 用户名` 创建员工账号。旧的 `server.py` 仅供本地原型使用，不应部署到公网。
 
-共享账号、持久化任务、后台剪辑队列、商品/数字人/爆款参考模式和部署说明见 [docs/team.md](docs/team.md)。当前生成服务尚未接入，在线部署尚未执行。
+共享账号、持久化任务、后台剪辑队列、商品/数字人/爆款参考模式和部署说明见 [docs/team.md](docs/team.md)。生成服务尚未接入；旧版本已由用户部署到 Render，本次更新需部署最新提交后生效。
 
 ## 项目技能
 
 已下载 HeyGen、Remotion、inference.sh 的 10 项项目级技能，位于 `.agents/skills/`。运行 `python tools/manage_skills.py --verify` 验证，或在新环境中运行 `python tools/manage_skills.py --install` 按固定版本恢复。用途、来源与未接入项见 [技能说明](docs/skills.md)。这些技能服务于后续开发，不代表员工端已接通视频模型。
+
+## 开源镜头检测
+
+已接入 PySceneDetect 的 ContentDetector（CPU 算法，无模型权重下载），默认检测前 180 秒的切镜点，按镜头提取不超过约 2.5 秒的中心片段。检测不到多个镜头时回退到时间规则分段。任务结果显示实际片段数、成片时长和是否带 BGM；剪辑时间表包含每段源素材时间戳。该算法不会按脚本理解画面或挑选卖点。详见 [模型选型](docs/model-selection.md)。
