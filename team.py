@@ -31,6 +31,7 @@ def init():
         CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, username TEXT NOT NULL, expires REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, owner TEXT NOT NULL, mode TEXT NOT NULL, script TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, error TEXT, url TEXT, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS attempts(address TEXT PRIMARY KEY, count INTEGER NOT NULL, expires REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS bootstrap_resets(id TEXT PRIMARY KEY, username TEXT NOT NULL);
         ''')
         db.execute("UPDATE tasks SET status='failed', error='服务重启导致任务中断，请重新提交' WHERE status='rendering'")
 
@@ -45,14 +46,30 @@ def create_user(name, password):
         db.execute('INSERT INTO users VALUES (?, ?, ?)', (name, salt, digest(password, salt)))
 
 def bootstrap_user():
-    """Initialize one account from deployment secrets, without resetting users."""
-    with connect() as db:
-        if db.execute('SELECT 1 FROM users LIMIT 1').fetchone():
-            return
-    name = os.getenv('BOOTSTRAP_USERNAME', '')
+    """Initialize an account or apply an explicit, one-time deployment reset."""
+    name = os.getenv('BOOTSTRAP_USERNAME', '').strip()
     password = os.getenv('BOOTSTRAP_PASSWORD', '')
-    if name or password:
-        create_user(name, password)
+    reset_id = os.getenv('BOOTSTRAP_RESET_ID', '').strip()
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        existing = db.execute('SELECT 1 FROM users LIMIT 1').fetchone()
+        if reset_id:
+            if db.execute('SELECT 1 FROM bootstrap_resets WHERE id=?', (reset_id,)).fetchone():
+                return
+            if not name or len(name) > 80 or len(password) < 12 or len(reset_id) > 200:
+                raise ValueError('账号重置配置无效：请填写用户名、至少 12 字符密码和有效重置标记')
+            salt = secrets.token_hex(16)
+            db.execute('INSERT INTO users VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET salt=excluded.salt,password=excluded.password', (name, salt, digest(password, salt)))
+            db.execute('DELETE FROM sessions WHERE username=?', (name,))
+            db.execute('DELETE FROM attempts')
+            db.execute('INSERT INTO bootstrap_resets VALUES (?,?)', (reset_id, name))
+            print('Bootstrap account reset applied.', flush=True)
+        elif not existing and (name or password):
+            if not name or len(name) > 80 or len(password) < 12:
+                raise ValueError('首次账号配置无效：用户名不能为空，密码至少 12 字符')
+            salt = secrets.token_hex(16)
+            db.execute('INSERT INTO users VALUES (?,?,?)', (name, salt, digest(password, salt)))
+            print('Bootstrap account initialized.', flush=True)
 
 def worker_once():
     with connect() as db:
@@ -125,7 +142,7 @@ class TeamHandler(studio.Handler):
                     attempt = db.execute('SELECT * FROM attempts WHERE address=?', (address,)).fetchone()
                     if attempt and attempt['expires'] > time.time() and attempt['count'] >= 10:
                         return self.send(429, {'error': '登录尝试过多，请 15 分钟后重试'})
-                    row = db.execute('SELECT * FROM users WHERE name=?', (str(data.get('username', '')),)).fetchone()
+                    row = db.execute('SELECT * FROM users WHERE name=?', (str(data.get('username', '')).strip(),)).fetchone()
                     password = str(data.get('password', ''))
                     actual = digest(password, row['salt'] if row else '00'*16)
                     if not row or not hmac.compare_digest(actual, row['password']):

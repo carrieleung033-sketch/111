@@ -14,6 +14,34 @@ from unittest.mock import patch
 import team
 
 class TeamTest(unittest.TestCase):
+    def test_one_time_reset_updates_password_revokes_sessions_and_preserves_tasks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(team, 'DB', Path(tmp)/'team.sqlite'):
+                team.init()
+                team.create_user('manager', 'original-long-password')
+                team.create_user('employee', 'employee-long-password')
+                with team.connect() as db:
+                    db.execute('INSERT INTO sessions VALUES (?,?,?)', ('old-session','manager',9999999999))
+                    db.execute('INSERT INTO sessions VALUES (?,?,?)', ('employee-session','employee',9999999999))
+                    db.execute('INSERT INTO attempts VALUES (?,?,?)', ('127.0.0.1',10,9999999999))
+                    db.execute('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?)', ('task','manager','assets','saved script','{}','done',None,'/media/test.mp4',1))
+                with patch.dict('os.environ', {'BOOTSTRAP_USERNAME':' manager ','BOOTSTRAP_PASSWORD':'new-long-password','BOOTSTRAP_RESET_ID':'reset-1'}):
+                    team.bootstrap_user()
+                with team.connect() as db:
+                    changed = dict(db.execute("SELECT * FROM users WHERE name='manager'").fetchone())
+                    self.assertEqual(changed['password'], team.digest('new-long-password',changed['salt']))
+                    self.assertEqual(db.execute('SELECT count(*) FROM tasks').fetchone()[0],1)
+                    self.assertEqual(db.execute('SELECT count(*) FROM attempts').fetchone()[0],0)
+                    self.assertEqual(db.execute('SELECT username FROM sessions').fetchone()[0],'employee')
+                with patch.dict('os.environ', {'BOOTSTRAP_USERNAME':'manager','BOOTSTRAP_PASSWORD':'should-not-be-applied','BOOTSTRAP_RESET_ID':'reset-1'}):
+                    team.bootstrap_user()
+                with team.connect() as db:
+                    self.assertEqual(dict(db.execute("SELECT * FROM users WHERE name='manager'").fetchone()),changed)
+                with patch.dict('os.environ', {'BOOTSTRAP_USERNAME':'manager','BOOTSTRAP_PASSWORD':'short','BOOTSTRAP_RESET_ID':'reset-2'}):
+                    with self.assertRaises(ValueError): team.bootstrap_user()
+                with team.connect() as db:
+                    self.assertIsNone(db.execute("SELECT 1 FROM bootstrap_resets WHERE id='reset-2'").fetchone())
+
     def test_bootstrap_does_not_reset_existing_accounts(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(team, 'DB', Path(tmp)/'team.sqlite'):
@@ -87,6 +115,14 @@ class TeamTest(unittest.TestCase):
                 self.assertEqual(completed['status'],'done',completed)
                 self.assertTrue((Path(tmp)/(queued['id']+'.mp4')).is_file())
                 self.assertFalse(team.worker_once())
+                with patch.dict('os.environ', {'BOOTSTRAP_USERNAME':'alice','BOOTSTRAP_PASSWORD':'reset-password-alice','BOOTSTRAP_RESET_ID':'login-reset'}):
+                    team.bootstrap_user()
+                self.assertIsNone(req(alice,'/api/me')['user'])
+                with self.assertRaises(urllib.error.HTTPError) as e:
+                    req(alice,'/api/login',{'username':'alice','password':'test-password-alice'})
+                self.assertEqual(e.exception.code,401)
+                req(alice,'/api/login',{'username':' alice ','password':'reset-password-alice'})
+                self.assertEqual(req(alice,'/api/me')['user'],'alice')
                 req(alice,'/api/logout',{})
                 self.assertIsNone(req(alice,'/api/me')['user'])
                 with self.assertRaises(urllib.error.HTTPError): req(alice,'/api/tasks')
